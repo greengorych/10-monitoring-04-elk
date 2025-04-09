@@ -1,0 +1,128 @@
+services:
+  elasticsearch-hot:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.4
+    container_name: elasticsearch-hot
+    environment:
+      - "node.name=elasticsearch-hot"
+      - "cluster.name=elasticsearch-cluster"
+      - "cluster.initial_master_nodes=elasticsearch-hot,elasticsearch-warm"
+      - "discovery.seed_hosts=elasticsearch-warm"
+      - "xpack.security.enabled=false"
+      - "xpack.security.http.ssl.enabled=false"
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+    restart: unless-stopped
+    expose:
+      - "9200"
+    networks:
+      - elasticsearch-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=green&timeout=30s"]
+      interval: 30s
+      retries: 3
+      start_period: 60s
+      timeout: 10s
+  elasticsearch-warm:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.4
+    container_name: elasticsearch-warm
+    environment:
+      - "node.name=elasticsearch-warm"
+      - "cluster.name=elasticsearch-cluster"
+      - "cluster.initial_master_nodes=elasticsearch-hot,elasticsearch-warm"
+      - "discovery.seed_hosts=elasticsearch-hot"
+      - "xpack.security.enabled=false"
+      - "xpack.security.http.ssl.enabled=false"
+      - "ES_JAVA_OPTS=-Xms256m -Xmx256m"
+    restart: unless-stopped
+    expose:
+      - "9200"
+    networks:
+      - elasticsearch-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=green&timeout=30s"]
+      interval: 30s
+      retries: 3
+      start_period: 60s
+      timeout: 10s
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.17.4
+    container_name: logstash
+    environment:
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+    ports:
+      - "5046:5046"
+    restart: unless-stopped
+    networks:
+      - elasticsearch-network
+    volumes:
+      - "./logstash/config:/usr/share/logstash/config"
+      - "./logstash/pipeline:/usr/share/logstash/pipeline"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9600/_node/stats"]
+      interval: 30s
+      retries: 3
+      start_period: 60s
+      timeout: 10s
+    depends_on:
+      - elasticsearch-hot
+      - elasticsearch-warm
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.4
+    container_name: kibana
+    environment:
+      - "ELASTICSEARCH_HOSTS=http://elasticsearch-hot:9200"
+      - "XPACK_SECURITY_ENABLED=false"
+    restart: unless-stopped
+    expose:
+      - "5601"
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch-hot
+      - elasticsearch-warm
+    networks:
+      - elasticsearch-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 30s
+      retries: 3
+      start_period: 60s
+      timeout: 10s
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.17.4
+    container_name: filebeat
+    user: root
+    privileged: true
+    environment:
+      - strict.perms=false
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+    restart: unless-stopped
+    networks:
+      - elasticsearch-network
+    healthcheck:
+      test: ["CMD", "filebeat", "test", "output"]
+      interval: 30s
+      retries: 3
+      start_period: 60s
+      timeout: 10s
+    depends_on:
+      - kibana
+      - logstash
+  pinger:
+    image: python:3.12.10-slim-bullseye
+    container_name: pinger
+    volumes:
+      - ./pinger/run.py:/opt/run.py
+    entrypoint: python3 /opt/run.py
+    restart: unless-stopped
+    networks:
+      - elasticsearch-network
+    depends_on:
+      - logstash
+ 
+networks:
+  elasticsearch-network:
+    name: elasticsearch-network
+    driver: bridge
